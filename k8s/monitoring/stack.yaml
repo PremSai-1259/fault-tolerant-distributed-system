@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: prometheus-config, namespace: fault-tolerance}
+data:
+  prometheus.yml: |-
+    global: {scrape_interval: 10s}
+    rule_files: [alerts.yml]
+    scrape_configs:
+    - job_name: applications
+      kubernetes_sd_configs: [{role: endpoints, namespaces: {names: [fault-tolerance]}}]
+      relabel_configs:
+      - {source_labels: [__meta_kubernetes_service_name], regex: '(result|marks|attendance|eligibility)-service', action: keep}
+      - {source_labels: [__meta_kubernetes_endpoint_ready], regex: 'true', action: keep}
+      - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+      - {source_labels: [__meta_kubernetes_service_name], target_label: service}
+    - job_name: failure-detector
+      static_configs: [{targets: [failure-detector:8001]}]
+    - job_name: node-exporter
+      static_configs: [{targets: [node-exporter:9100]}]
+    - job_name: kube-state-metrics
+      static_configs: [{targets: [kube-state-metrics:8080]}]
+    - job_name: kubernetes-cadvisor
+      scheme: https
+      tls_config: {insecure_skip_verify: true}
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      kubernetes_sd_configs: [{role: node}]
+      relabel_configs: [{action: labelmap, regex: __meta_kubernetes_node_label_(.+)}, {target_label: __address__, replacement: kubernetes.default.svc:443}, {source_labels: [__meta_kubernetes_node_name], target_label: __metrics_path__, replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor}]
+  alerts.yml: |-
+    groups: [{name: ft, rules: [{alert: ServiceUnavailable, expr: 'ft_service_ready == 0', for: 30s}]}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: prometheus, namespace: fault-tolerance}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: prometheus-node-metrics}
+rules: [{apiGroups: [""], resources: [nodes, nodes/proxy, endpoints, services, pods], verbs: [get, list, watch]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: prometheus-node-metrics}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: prometheus-node-metrics}
+subjects: [{kind: ServiceAccount, name: prometheus, namespace: fault-tolerance}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: prometheus, namespace: fault-tolerance}
+spec: {replicas: 1, selector: {matchLabels: {app: prometheus}}, template: {metadata: {labels: {app: prometheus}}, spec: {serviceAccountName: prometheus, containers: [{name: prometheus, image: prom/prometheus:v2.54.1, args: ['--config.file=/etc/prometheus/prometheus.yml'], ports: [{containerPort: 9090}], volumeMounts: [{name: config, mountPath: /etc/prometheus}]}], volumes: [{name: config, configMap: {name: prometheus-config}}]}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prometheus, namespace: fault-tolerance}
+spec: {selector: {app: prometheus}, ports: [{port: 9090, targetPort: 9090}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: loki, namespace: fault-tolerance}
+spec: {replicas: 1, selector: {matchLabels: {app: loki}}, template: {metadata: {labels: {app: loki}}, spec: {containers: [{name: loki, image: grafana/loki:3.1.1, args: ['-config.file=/etc/loki/loki.yml'], ports: [{containerPort: 3100}], volumeMounts: [{name: config, mountPath: /etc/loki}]}], volumes: [{name: config, configMap: {name: loki-config}}]}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: loki, namespace: fault-tolerance}
+spec: {selector: {app: loki}, ports: [{port: 3100, targetPort: 3100}]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: loki-config, namespace: fault-tolerance}
+data:
+  loki.yml: |-
+    auth_enabled: false
+    server: {http_listen_port: 3100}
+    common: {path_prefix: /loki, storage: {filesystem: {chunks_directory: /loki/chunks, rules_directory: /loki/rules}}, replication_factor: 1, ring: {kvstore: {store: inmemory}}}
+    schema_config: {configs: [{from: "2024-01-01", store: tsdb, object_store: filesystem, schema: v13, index: {prefix: index_, period: 24h}}]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: grafana-provisioning, namespace: fault-tolerance}
+data:
+  datasources.yaml: |-
+    apiVersion: 1
+    datasources:
+    - {name: Prometheus, type: prometheus, access: proxy, url: http://prometheus:9090, isDefault: true}
+    - {name: Loki, type: loki, access: proxy, url: http://loki:3100}
+  dashboards.yaml: |-
+    apiVersion: 1
+    providers: [{name: Fault-Tolerance, type: file, options: {path: /var/lib/grafana/dashboards}}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: grafana-dashboards, namespace: fault-tolerance}
+data:
+  application-health.json: '{"title":"Application Health","panels":[{"title":"Request rate","type":"timeseries","targets":[{"expr":"sum(rate(ft_http_requests_total[1m])) by (service)"}]},{"title":"p95 latency","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95,sum(rate(ft_http_request_duration_seconds_bucket[5m])) by (le,service))"}]}]}'
+  fault-tolerance.json: '{"title":"Fault Tolerance","panels":[{"title":"Injected failures","type":"timeseries","targets":[{"expr":"sum(rate(ft_injected_failures_total[1m])) by (service,kind)"}]},{"title":"Downstream errors","type":"timeseries","targets":[{"expr":"sum(rate(ft_downstream_errors_total[1m])) by (service,downstream)"}]},{"title":"Logs","type":"logs","targets":[{"expr":"{namespace=\"fault-tolerance\"}"}]}]}'
+  infrastructure.json: '{"title":"Infrastructure","panels":[{"title":"Node CPU utilization","type":"timeseries","targets":[{"expr":"100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))"}]},{"title":"Node memory utilization","type":"timeseries","targets":[{"expr":"100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)"}]},{"title":"Container CPU by pod","type":"timeseries","targets":[{"expr":"sum(rate(container_cpu_usage_seconds_total{namespace=\"fault-tolerance\",container!=\"\"}[5m])) by (pod,container)"}]},{"title":"Container memory by pod","type":"timeseries","targets":[{"expr":"sum(container_memory_working_set_bytes{namespace=\"fault-tolerance\",container!=\"\"}) by (pod,container)"}]},{"title":"Desired vs available replicas","type":"timeseries","targets":[{"expr":"kube_deployment_spec_replicas{namespace=\"fault-tolerance\"}"},{"expr":"kube_deployment_status_replicas_available{namespace=\"fault-tolerance\"}"}]},{"title":"Pod restarts","type":"timeseries","targets":[{"expr":"sum(kube_pod_container_status_restarts_total{namespace=\"fault-tolerance\"}) by (pod,container)"}]},{"title":"Node readiness","type":"timeseries","targets":[{"expr":"kube_node_status_condition{condition=\"Ready\",status=\"true\"}"}]},{"title":"Detector service availability","type":"timeseries","targets":[{"expr":"failure_detector_service_up"}]}]}'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: grafana, namespace: fault-tolerance}
+spec: {replicas: 1, selector: {matchLabels: {app: grafana}}, template: {metadata: {labels: {app: grafana}}, spec: {containers: [{name: grafana, image: grafana/grafana:11.1.4, ports: [{containerPort: 3000}], volumeMounts: [{name: provisioning, mountPath: /etc/grafana/provisioning/datasources}, {name: dashboards-config, mountPath: /etc/grafana/provisioning/dashboards}, {name: dashboards, mountPath: /var/lib/grafana/dashboards}]}], volumes: [{name: provisioning, configMap: {name: grafana-provisioning, items: [{key: datasources.yaml, path: datasources.yaml}]}}, {name: dashboards-config, configMap: {name: grafana-provisioning, items: [{key: dashboards.yaml, path: dashboards.yaml}]}}, {name: dashboards, configMap: {name: grafana-dashboards}}]}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: grafana, namespace: fault-tolerance}
+spec: {selector: {app: grafana}, ports: [{port: 3000, targetPort: 3000}]}

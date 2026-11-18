@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: alloy, namespace: fault-tolerance}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: alloy-pod-reader}
+rules: [{apiGroups: [""], resources: [pods, namespaces], verbs: [get, list, watch]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: alloy-pod-reader}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: alloy-pod-reader}
+subjects: [{kind: ServiceAccount, name: alloy, namespace: fault-tolerance}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: alloy-config, namespace: fault-tolerance}
+data:
+  config.alloy: |-
+    discovery.kubernetes "pods" { role = "pod" namespaces { names = ["fault-tolerance"] } }
+    discovery.relabel "pods" {
+      targets = discovery.kubernetes.pods.targets
+      rule { source_labels = ["__meta_kubernetes_namespace"]; target_label = "namespace" }
+      rule { source_labels = ["__meta_kubernetes_pod_name"]; target_label = "pod" }
+      rule { source_labels = ["__meta_kubernetes_pod_container_name"]; target_label = "container" }
+      rule { source_labels = ["__meta_kubernetes_pod_label_app"]; target_label = "service" }
+      rule { source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]; separator = "/"; target_label = "__path__"; replacement = "/var/log/pods/*$1/*.log" }
+    }
+    loki.process "cri" { forward_to = [loki.write.default.receiver]; stage.cri {} }
+    loki.source.file "pods" { targets = discovery.relabel.pods.output; forward_to = [loki.process.cri.receiver] }
+    loki.write "default" { endpoint { url = "http://loki:3100/loki/api/v1/push" } }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: alloy, namespace: fault-tolerance}
+spec:
+  selector: {matchLabels: {app: alloy}}
+  template:
+    metadata: {labels: {app: alloy}}
+    spec:
+      serviceAccountName: alloy
+      containers:
+      - name: alloy
+        image: grafana/alloy:v1.3.1
+        args: [run, /etc/alloy/config.alloy]
+        volumeMounts: [{name: config, mountPath: /etc/alloy}, {name: pods, mountPath: /var/log/pods, readOnly: true}]
+      volumes: [{name: config, configMap: {name: alloy-config}}, {name: pods, hostPath: {path: /var/log/pods, type: Directory}}]

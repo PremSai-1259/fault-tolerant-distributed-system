@@ -1,0 +1,5 @@
+// Source of truth is k8s/logging/alloy.yaml ConfigMap, mounted by the DaemonSet.
+// This copy documents the same Kubernetes-discovery/CRI pipeline for local review.
+discovery.kubernetes "pods" { role = "pod" namespaces { names = ["fault-tolerance"] } }
+loki.process "cri" { forward_to = [loki.write.default.receiver]; stage.cri {} }
+loki.write "default" { endpoint { url = "http://loki.fault-tolerance.svc.cluster.local:3100/loki/api/v1/push" } }

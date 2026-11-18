@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: failure-detector-events, namespace: fault-tolerance}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 256Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: failure-detector, namespace: fault-tolerance, labels: {app: failure-detector}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: failure-detector}}
+  template:
+    metadata: {labels: {app: failure-detector}}
+    spec:
+      containers:
+      - name: failure-detector
+        image: ft/failure-detector:local
+        imagePullPolicy: IfNotPresent
+        command: [python, -m, failure_detector.main]
+        env:
+        - {name: CHECK_INTERVAL, value: "5"}
+        - {name: FAILURE_THRESHOLD, value: "3"}
+        - {name: HEALTH_TIMEOUT, value: "1"}
+        - {name: EVENT_FILE, value: /events/failure_events.csv}
+        - {name: METRICS_PORT, value: "8001"}
+        ports: [{name: metrics, containerPort: 8001}]
+        resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 200m, memory: 128Mi}}
+        livenessProbe: {tcpSocket: {port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+        readinessProbe: {tcpSocket: {port: metrics}, initialDelaySeconds: 3, periodSeconds: 5}
+        volumeMounts: [{name: events, mountPath: /events}]
+      volumes: [{name: events, persistentVolumeClaim: {claimName: failure-detector-events}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: failure-detector, namespace: fault-tolerance, labels: {app: failure-detector}}
+spec:
+  selector: {app: failure-detector}
+  ports: [{name: metrics, port: 8001, targetPort: metrics}]

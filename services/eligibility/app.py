@@ -1,15 +1,5 @@
 from fastapi import FastAPI
-
-app = FastAPI()
-
-@app.get("/eligibility/{student_id}")
-def eligibility(student_id: int, attendance: float = 0):
-    return {
-        "student_id": student_id,
-        "attendance": attendance,
-        "eligible": attendance >= 75
-    }
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+from services.common.observability import install, lifespan
+app=FastAPI(title="Eligibility Service", lifespan=lifespan); install(app)
+@app.get("/eligibility/{percentage}")
+async def eligibility(percentage:float): return {"attendance_percentage":percentage,"threshold":75,"eligible":percentage>=75}

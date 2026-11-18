@@ -1,34 +1,8 @@
-import requests
-from fastapi import FastAPI, HTTPException
-
-app = FastAPI()
-
-ATTENDANCE_URL = "http://attendance-service:8000"
-
+from fastapi import FastAPI, Header, HTTPException
+from services.common.observability import install, lifespan
+DATA={"S001":{"math":88,"science":91},"S002":{"math":74,"science":69},"S003":{"math":55,"science":62}}
+app=FastAPI(title="Marks Service", lifespan=lifespan); install(app)
 @app.get("/marks/{student_id}")
-def marks(student_id: int):
-    student_marks = 85
-
-    try:
-        response = requests.get(
-            f"{ATTENDANCE_URL}/attendance/{student_id}",
-            timeout=3
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        return {
-            "student_id": student_id,
-            "marks": student_marks,
-            "attendance": data["attendance"],
-            "eligible": data["eligible"]
-        }
-    except requests.RequestException:
-        raise HTTPException(
-            status_code=503,
-            detail="Attendance Service unavailable"
-        )
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+async def marks(student_id:str, x_request_id:str=Header("")):
+    if student_id not in DATA: raise HTTPException(404,"student_not_found")
+    values=DATA[student_id]; return {"student_id":student_id,"marks":values,"average":sum(values.values())/len(values),"request_id":x_request_id}

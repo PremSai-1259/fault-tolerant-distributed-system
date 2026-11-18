@@ -1,0 +1,21 @@
+groups:
+- name: fault-tolerance
+  rules:
+  - alert: ServiceUnavailable
+    expr: ft_service_ready == 0
+    for: 30s
+  - alert: High5xxRate
+    expr: sum(rate(ft_http_requests_total{status=~"5.."}[2m])) by (service) > 0.1
+    for: 1m
+  - alert: HighLatency
+    expr: histogram_quantile(0.95,sum(rate(ft_http_request_duration_seconds_bucket[5m])) by (le,service)) > 1
+    for: 2m
+  - alert: UnavailableReplicas
+    expr: kube_deployment_status_replicas_available < kube_deployment_spec_replicas
+    for: 1m
+  - alert: PodRestartIncrease
+    expr: increase(kube_pod_container_status_restarts_total[10m]) > 0
+  - alert: HighCPU
+    expr: sum(rate(container_cpu_usage_seconds_total[5m])) by (pod) > 0.8
+  - alert: HighMemory
+    expr: container_memory_working_set_bytes / container_spec_memory_limit_bytes > 0.9

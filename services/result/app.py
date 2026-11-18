@@ -1,35 +1,12 @@
-import requests
-from fastapi import FastAPI, HTTPException
-
-app = FastAPI()
-
-MARKS_URL = "http://marks-service:8000"
-
-@app.get("/result/{student_id}")
-def result(student_id: int):
-    try:
-        response = requests.get(
-            f"{MARKS_URL}/marks/{student_id}",
-            timeout=5
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        passed = data["marks"] >= 40 and data["eligible"]
-
-        return {
-            "student_id": student_id,
-            "marks": data["marks"],
-            "attendance": data["attendance"],
-            "eligible": data["eligible"],
-            "result": "PASS" if passed else "FAIL"
-        }
-    except requests.RequestException:
-        raise HTTPException(
-            status_code=503,
-            detail="Marks Service unavailable"
-        )
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+import asyncio, os
+from fastapi import FastAPI, Header, HTTPException
+from services.common.observability import install, lifespan
+from services.common.client import get_json
+app=FastAPI(title="Result Service", lifespan=lifespan); install(app)
+@app.get("/results/{student_id}")
+async def result(student_id:str, x_request_id:str=Header("")):
+    marks_url=f"{os.getenv('MARKS_URL','http://marks-service:8000')}/marks/{student_id}"
+    attendance_url=f"{os.getenv('ATTENDANCE_URL','http://attendance-service:8000')}/attendance/{student_id}"
+    (marks,me),(attendance,ae)=await asyncio.gather(get_json("marks",marks_url,x_request_id),get_json("attendance",attendance_url,x_request_id))
+    if me or ae: raise HTTPException(503,{"error":"downstream_unavailable","category":"infrastructure","details":{"marks":me,"attendance":ae}})
+    return {"student_id":student_id,"marks":marks["marks"],"average":marks["average"],"attendance_percentage":attendance["attendance_percentage"],"eligible":attendance["eligibility"],"outcome":"eligible" if attendance["eligibility"] else "business_ineligible","request_id":x_request_id}
