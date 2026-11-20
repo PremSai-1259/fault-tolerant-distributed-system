@@ -1,0 +1,90 @@
+{
+  "title": "Infrastructure",
+  "panels": [
+    {
+      "title": "Node CPU Utilization",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Node Memory Utilization",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Container CPU by Pod",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"fault-tolerance\",container!=\"\"}[5m])) by (pod,container)",
+          "legendFormat": "{{pod}} - {{container}}"
+        }
+      ]
+    },
+    {
+      "title": "Container Memory by Pod",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"fault-tolerance\",container!=\"\"}) by (pod,container)",
+          "legendFormat": "{{pod}} - {{container}}"
+        }
+      ]
+    },
+    {
+      "title": "Desired vs Available Replicas",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kube_deployment_spec_replicas{namespace=\"fault-tolerance\"}",
+          "legendFormat": "Desired - {{deployment}}"
+        },
+        {
+          "expr": "kube_deployment_status_replicas_available{namespace=\"fault-tolerance\"}",
+          "legendFormat": "Available - {{deployment}}"
+        }
+      ]
+    },
+    {
+      "title": "Pod Restarts",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"fault-tolerance\"}) by (pod,container)",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "title": "Node Readiness",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kube_node_status_condition{condition=\"Ready\",status=\"true\"}",
+          "legendFormat": "{{node}}"
+        }
+      ]
+    },
+    {
+      "title": "Detector Availability",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "failure_detector_service_up",
+          "legendFormat": "Detector"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39
+}

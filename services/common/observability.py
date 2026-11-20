@@ -46,6 +46,7 @@ def install(app: FastAPI):
     @app.middleware("http")
     async def telemetry(request: Request, call_next):
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        request.state.request_id = request_id
         started = time.perf_counter(); log("request_received", "request received", request_id=request_id, method=request.method, endpoint=request.url.path)
         try:
             if request.url.path not in ("/health/live", "/health/ready", "/metrics", "/admin/fault"):

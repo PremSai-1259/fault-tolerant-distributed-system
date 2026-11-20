@@ -1,0 +1,26 @@
+{
+  "title": "Application Health",
+  "panels": [
+    {
+      "title": "Request Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (exported_service) (rate(ft_http_requests_total[1m]))",
+          "legendFormat": "{{exported_service}}"
+        }
+      ]
+    },
+    {
+      "title": "P95 Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, exported_service) (rate(ft_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{exported_service}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39
+}
